@@ -1,16 +1,23 @@
-# Out
-out/*
+# --- 构建与发布产物（不入库）---
+out/
+dist/
+svgtest_harness/bin/
+svgtest_harness/obj/
+svgtest_harness/out/
+svgtest_harness/Program.cs
 
-# Shared objects (inc. Windows DLLs)
+# --- 二进制 / 交付包 ---
 *.dll
 *.so
 *.so.*
 *.dylib
-
-# Executables
 *.exe
-*.out
 *.app
 *.i*86
 *.x86_64
 *.hex
+*.zip
+
+# --- 系统杂项 ---
+.DS_Store
+Thumbs.db
