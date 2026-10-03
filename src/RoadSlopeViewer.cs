@@ -1,4 +1,13 @@
-// RoadSlopeViewer v0.4 — 城市天际线 CS1：在游戏内查看道路 / 轨道交通坡度
+// RoadSlopeViewer v0.5 — 城市天际线 CS1：在游戏内查看道路 / 轨道交通坡度
+//
+// v0.5 变更：
+//   1) 修复覆盖层黑框：v0.4 把标签背景贴图首选改成了未实测的 "MenuPanel"（作为
+//      58×20 小标签背景时渲染崩坏成异常大黑块）——恢复 v0.3 实测顺序的 GenericPanel 系；
+//      PickSprite 全失败时兜底改为 "ButtonMenu"（确定存在，免踩无效贴图名静默坑）。
+//   2) 修复导出完成通知不达：RsvPump 原为 internal，而游戏扫描扩展类用的是
+//      Assembly.GetExportedTypes()（只认 public 类型，反编译 PluginInfo.GetInstances 实证），
+//      internal 的 ThreadingExtension 静默不实例化、OnUpdate 永不调用。
+//   3) 新增选项：标签可视距离 / 最大标签数 / 道路与轨道交通各自的标签配色阈值（各 3 档）。
 //
 // v0.4 变更（依官方 mod wiki 规范 + 反编译实证整理）：
 //   1) UI 规范化（参考 wiki UI Framework）：所有挂到 UIView 的组件都设置 name；
@@ -58,9 +67,8 @@ namespace RoadSlopeViewer
 
     internal class SlopeUI
     {
-        // ---- 参数（想改直接改这里）----
-        private const int PoolSize = 90;             // 覆盖层标签上限
-        private const float MaxDist = 420f;          // 只标注相机附近这个半径内的路段
+        // ---- 参数 ----
+        // 标签上限 / 可视距离 / 颜色阈值 可在 选项 → 模组设置 中调整（Rsv 持久化，见 OptionsUI.cs）。
         private const float SteepPct = 5f;           // “只看陡坡”阈值
         private const float ClickPx = 26f;           // 点选容差（屏幕像素）
         private const float TickInterval = 0.16f;    // 刷新间隔（秒）
@@ -108,31 +116,10 @@ namespace RoadSlopeViewer
                     _updater.isVisible = false;
                 }
 
-                _sBox = PickSprite("MenuPanel", "GenericPanel", "MenuPanel2", "ButtonMenu");
+                // 注意：不要用 "MenuPanel"——它作为小尺寸标签背景会渲染出异常大黑块
+                _sBox = PickSprite("GenericPanel", "MenuPanel2", "ButtonMenu", "InfoDisplay");
 
-                if (_pool == null)
-                {
-                    _pool = new UILabel[PoolSize];
-                    for (int i = 0; i < PoolSize; i++)
-                    {
-                        UILabel l = view.AddUIComponent(typeof(UILabel)) as UILabel;
-                        l.name = "RSV_SlopeLabel" + i;
-                        l.isInteractive = false;
-                        l.isVisible = false;
-                        l.size = new Vector2(58f, 20f);                     // 比文字大一圈
-                        l.textScale = 0.75f;
-                        l.textAlignment = UIHorizontalAlignment.Center;
-                        l.verticalAlignment = UIVerticalAlignment.Middle;
-                        l.backgroundSprite = _sBox;                          // 半透明黑底
-                        l.color = BoxColor;
-                        l.padding = new RectOffset(2, 2, 1, 1);
-                        l.useOutline = true;
-                        l.outlineColor = new Color32(0, 0, 0, 255);
-                        l.outlineSize = 1;
-                        l.text = "";
-                        _pool[i] = l;
-                    }
-                }
+                if (_pool == null) MakePool(view, Mathf.Clamp(Rsv.LabelMax.value, 1, 1000));
 
                 if (_marker == null)
                 {
@@ -159,6 +146,45 @@ namespace RoadSlopeViewer
                 else RefreshHint();
             }
             catch (Exception e) { LogOnce("Create: " + e); }
+        }
+
+        /// <summary>创建标签池（数量可在选项中调整；调整后由 Tick 检测并重建）。</summary>
+        private static void MakePool(UIView view, int size)
+        {
+            _pool = new UILabel[size];
+            for (int i = 0; i < size; i++)
+            {
+                UILabel l = view.AddUIComponent(typeof(UILabel)) as UILabel;
+                l.name = "RSV_SlopeLabel" + i;
+                l.isInteractive = false;
+                l.isVisible = false;
+                l.size = new Vector2(58f, 20f);                     // 比文字大一圈
+                l.textScale = 0.75f;
+                l.textAlignment = UIHorizontalAlignment.Center;
+                l.verticalAlignment = UIVerticalAlignment.Middle;
+                l.backgroundSprite = _sBox;                          // 半透明黑底
+                l.color = BoxColor;
+                l.padding = new RectOffset(2, 2, 1, 1);
+                l.useOutline = true;
+                l.outlineColor = new Color32(0, 0, 0, 255);
+                l.outlineSize = 1;
+                l.text = "";
+                _pool[i] = l;
+            }
+        }
+
+        /// <summary>销毁并按新数量重建标签池（选项里改“最大显示标签数”后生效）。</summary>
+        private static void RebuildPool(int size)
+        {
+            if (_pool != null)
+            {
+                for (int i = 0; i < _pool.Length; i++)
+                    if (_pool[i] != null) UnityEngine.Object.Destroy(_pool[i].gameObject);
+                _pool = null;
+            }
+            UIView view = UIView.GetAView();
+            if (view == null) return;
+            MakePool(view, size);
         }
 
         public static void Destroy()
@@ -199,7 +225,7 @@ namespace RoadSlopeViewer
 
             UILabel title = _panel.AddUIComponent(typeof(UILabel)) as UILabel;
             title.name = "RSV_Title";
-            title.text = "坡度查看器  v0.4";
+            title.text = "坡度查看器  v0.5";
             title.textScale = 0.85f;
             title.size = new Vector2(244f, 20f);
             title.relativePosition = new Vector3(14f, 6f);
@@ -333,7 +359,7 @@ namespace RoadSlopeViewer
                 }
             }
             catch { }
-            return a;
+            return "ButtonMenu";   // 已确认存在的安全兜底（原实现返回首参可能不存在）
         }
 
         // ================= 每帧 =================
@@ -362,6 +388,10 @@ namespace RoadSlopeViewer
                 if (now < _next) return;
                 _next = now + TickInterval;
 
+                // 选项里改了“最大显示标签数” → 重建标签池
+                int wantLabels = Mathf.Clamp(Rsv.LabelMax.value, 1, 1000);
+                if (_pool != null && _pool.Length != wantLabels) RebuildPool(wantLabels);
+
                 if (_overlay) RefreshOverlay(); else HideAll();
                 UpdateMarker();
             }
@@ -374,7 +404,7 @@ namespace RoadSlopeViewer
             for (int i = 0; i < _pool.Length; i++) if (_pool[i] != null) _pool[i].isVisible = false;
         }
 
-        private struct Cand { public ushort id; public float sqrDist; public Vector3 sp; public float pct; }
+        private struct Cand { public ushort id; public float sqrDist; public Vector3 sp; public float pct; public bool rail; }
 
         private static void RefreshOverlay()
         {
@@ -384,7 +414,8 @@ namespace RoadSlopeViewer
             if (view == null || cam == null || nm == null || _pool == null) { HideAll(); return; }
 
             Vector3 camPos = cam.transform.position;
-            float maxSqr = MaxDist * MaxDist;
+            float maxDist = Mathf.Clamp(Rsv.LabelDist.value, 50f, 5000f);   // 选项可调（米）
+            float maxSqr = maxDist * maxDist;
             NetSegment[] segBuf = nm.m_segments.m_buffer;
             NetNode[] nodeBuf = nm.m_nodes.m_buffer;
             List<Cand> list = new List<Cand>(512);
@@ -412,6 +443,7 @@ namespace RoadSlopeViewer
                 if (i == _selected) continue;                        // 选中段只显示蓝色标记
                 Cand cd = new Cand();
                 cd.id = (ushort)i; cd.sqrDist = sq; cd.sp = sp; cd.pct = pct;
+                cd.rail = info.m_class.m_service == ItemClass.Service.PublicTransport;
                 list.Add(cd);
             }
 
@@ -424,7 +456,7 @@ namespace RoadSlopeViewer
                 UILabel l = _pool[k];
                 string txt = FmtPct(cd.pct);
                 if (l.text != txt) l.text = txt;
-                l.textColor = ColorFor(cd.pct);
+                l.textColor = ColorFor(cd.pct, cd.rail);
                 Vector2 gui = view.ScreenPointToGUI(cd.sp / view.inputScale);
                 l.relativePosition = new Vector3(gui.x - l.width * 0.5f, gui.y - l.height * 0.5f, 0f);
                 if (!l.isVisible) l.isVisible = true;
@@ -526,7 +558,8 @@ namespace RoadSlopeViewer
             _lines[3].text = "海拔 " + a.y.ToString("0.0") + " → " + b.y.ToString("0.0");
             _lines[4].text = "整条线 " + cs + "段 " + totH.ToString("0") + "m 均" + FmtPct(totH > 0.5f ? Mathf.Abs(totDy) / totH * 100f : 0f)
                              + " 峰" + FmtPct(maxPct);
-            _lines[4].textColor = ColorFor(maxPct);
+            bool selRail = info != null && info.m_class.m_service != ItemClass.Service.Road;
+            _lines[4].textColor = ColorFor(maxPct, selRail);
         }
 
         private static void WalkChain(ushort start, out int count, out float totalH, out float totalDy, out float maxPct)
@@ -638,13 +671,18 @@ namespace RoadSlopeViewer
             return s.Length <= n ? s : s.Substring(0, n) + "…";
         }
 
-        private static Color32 ColorFor(float pct)
+        /// <summary>标签颜色（4 档：绿/黄/橙/红），阈值可在选项中按道路/轨道分别设置。</summary>
+        private static Color32 ColorFor(float pct, bool rail)
         {
-            if (pct < 3f) return new Color32(120, 235, 130, 255);
-            if (pct < 8f) return new Color32(250, 235, 120, 255);
-            if (pct < 12f) return new Color32(255, 170, 70, 255);
-            if (pct < 18f) return new Color32(255, 110, 70, 255);
-            return new Color32(255, 70, 70, 255);
+            int t1 = rail ? Rsv.RailT1.value : Rsv.RoadT1.value;
+            int t2 = rail ? Rsv.RailT2.value : Rsv.RoadT2.value;
+            int t3 = rail ? Rsv.RailT3.value : Rsv.RoadT3.value;
+            if (t2 < t1) t2 = t1;               // 防呆：阈值必须递增
+            if (t3 < t2) t3 = t2;
+            if (pct < t1) return new Color32(120, 235, 130, 255);   // 绿
+            if (pct < t2) return new Color32(250, 235, 120, 255);   // 黄
+            if (pct < t3) return new Color32(255, 170, 70, 255);    // 橙
+            return new Color32(255, 70, 70, 255);                    // 红
         }
 
         private static void LogOnce(string msg)

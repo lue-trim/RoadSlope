@@ -46,6 +46,25 @@ namespace RoadSlopeViewer
         public static readonly SavedBool ExportLabels =
             new SavedBool("rsv_export_labels", Settings.gameSettingsFile, true, true);
 
+        // 标签显示（游戏内覆盖层）
+        public static readonly SavedInt LabelDist =
+            new SavedInt("rsv_label_dist", Settings.gameSettingsFile, 420, true);   // 可视距离（米）
+        public static readonly SavedInt LabelMax =
+            new SavedInt("rsv_label_max", Settings.gameSettingsFile, 90, true);     // 同时显示标签上限
+        // 标签颜色阈值（%）：绿→黄 / 黄→橙 / 橙→红
+        public static readonly SavedInt RoadT1 =
+            new SavedInt("rsv_road_t1", Settings.gameSettingsFile, 8, true);
+        public static readonly SavedInt RoadT2 =
+            new SavedInt("rsv_road_t2", Settings.gameSettingsFile, 12, true);
+        public static readonly SavedInt RoadT3 =
+            new SavedInt("rsv_road_t3", Settings.gameSettingsFile, 20, true);
+        public static readonly SavedInt RailT1 =
+            new SavedInt("rsv_rail_t1", Settings.gameSettingsFile, 3, true);
+        public static readonly SavedInt RailT2 =
+            new SavedInt("rsv_rail_t2", Settings.gameSettingsFile, 6, true);
+        public static readonly SavedInt RailT3 =
+            new SavedInt("rsv_rail_t3", Settings.gameSettingsFile, 10, true);
+
         /// <summary>当前快捷键的显示名（本地化，失败回退枚举名）。</summary>
         public static string KeyLabel()
         {
@@ -70,6 +89,7 @@ namespace RoadSlopeViewer
         {
             try
             {
+                BuildLabelGroups(helper);
                 BuildKeyGroup(helper);
                 BuildExportGroup(helper);
             }
@@ -78,6 +98,80 @@ namespace RoadSlopeViewer
                 Debug.LogError("[RoadSlopeViewer] OnSettingsUI 构建失败: " + e);
                 try { helper.AddGroup("道路坡度查看器 — 设置界面初始化失败（详见 output_log.txt）"); } catch { }
             }
+        }
+
+        // ---------- 标签显示与配色阈值（游戏内覆盖层） ----------
+
+        private static void BuildLabelGroups(UIHelperBase helper)
+        {
+            UIHelperBase g = helper.AddGroup("标签显示（游戏内覆盖层）");
+            AddIntSlider(g, "标签可视距离", " 米", 100, 2000, 25, Rsv.LabelDist, "RSV_SlDist",
+                "只标注相机附近这个半径内的路段。");
+            AddIntSlider(g, "最大显示标签数", " 个", 10, 400, 10, Rsv.LabelMax, "RSV_SlMax",
+                "屏幕上同时显示的坡度标签上限（调整后立即生效）。");
+
+            BuildThresholdGroup(helper, "标签配色阈值（道路）", Rsv.RoadT1, Rsv.RoadT2, Rsv.RoadT3,
+                "道路标签 4 档配色的分界：低于第 1 档为绿，超过第 3 档为红（默认 8/12/20，参照现实市区限坡）。");
+            BuildThresholdGroup(helper, "标签配色阈值（轨道交通）", Rsv.RailT1, Rsv.RailT2, Rsv.RailT3,
+                "轨道交通标签 4 档配色的分界（默认 3/6/10，参照现实铁路限坡）。");
+        }
+
+        private static void BuildThresholdGroup(UIHelperBase helper, string groupName,
+            SavedInt t1, SavedInt t2, SavedInt t3, string tip)
+        {
+            UIHelperBase g = helper.AddGroup(groupName);
+            AddIntSlider(g, "绿→黄分界", "%", 1, 60, 1, t1, null, tip);
+            AddIntSlider(g, "黄→橙分界", "%", 1, 60, 1, t2, null, tip);
+            AddIntSlider(g, "橙→红分界", "%", 1, 60, 1, t3, null, tip);
+        }
+
+        /// <summary>整数滑块：标题实时显示当前值；值写入 SavedInt（选项面板重建时恢复）。</summary>
+        private static void AddIntSlider(UIHelperBase g, string name, string unit,
+            int min, int max, int step, SavedInt store, string compName, string tip)
+        {
+            UISlider sl = null;
+            sl = g.AddSlider(name, min, max, step, store.value, delegate(float v)
+            {
+                int iv = Mathf.RoundToInt(v);
+                store.value = iv;
+                UpdateSliderText(sl, name, iv, unit);
+            }) as UISlider;
+            if (sl == null) return;
+            try
+            {
+                sl.name = string.IsNullOrEmpty(compName) ? ("RSV_Slider_" + name) : compName;
+                if (!string.IsNullOrEmpty(tip)) sl.tooltip = tip;
+            }
+            catch { }
+            UpdateSliderText(sl, name, store.value, unit);
+        }
+
+        /// <summary>把滑块标题更新为“名称：当前值”（模板内 "Label" 子组件；找不到则静默）。</summary>
+        private static void UpdateSliderText(UISlider sl, string name, float v, string unit)
+        {
+            if (sl == null) return;
+            try
+            {
+                UILabel lab = FindLabelUp(sl);
+                if (lab != null) lab.text = name + "：" + Mathf.RoundToInt(v) + unit;
+            }
+            catch { }
+        }
+
+        private static UILabel FindLabelUp(UIComponent c)
+        {
+            try
+            {
+                UIComponent p = c.parent;
+                for (int i = 0; i < 3 && p != null; i++)
+                {
+                    UILabel lab = p.Find<UILabel>("Label");
+                    if (lab != null) return lab;
+                    p = p.parent;
+                }
+            }
+            catch { }
+            return null;
         }
 
         // ---------- 快捷键 ----------
@@ -245,8 +339,12 @@ namespace RoadSlopeViewer
         }
     }
 
-    /// <summary>全局心跳：把后台导出完成的通知转回主线程 UI（任何场景都跑）。</summary>
-    internal class RsvPump : ThreadingExtensionBase
+    /// <summary>
+    /// 全局心跳：把后台导出完成的通知转回主线程 UI（任何场景都跑）。
+    /// 必须是 public：游戏扫描扩展类用 Assembly.GetExportedTypes()（只返回 public 类型，
+    /// 反编译 PluginInfo.GetInstances 实证）——internal 会静默不实例化、OnUpdate 永不调用。
+    /// </summary>
+    public class RsvPump : ThreadingExtensionBase
     {
         public override void OnUpdate(float realTimeDelta, float simulationTimeDelta)
         {
