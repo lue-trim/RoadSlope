@@ -35,6 +35,9 @@ bash build.sh     # 输出 out/RoadSlopeViewer.dll（net35）
 
 ## 版本
 
+- **v0.6**：坡度算法修正——坡度 = 高差 ÷ 实际道路长度（`m_averageLength`，各车道曲线
+  弧长均值），曲线段不再按两点直线距离高估坡度；游戏内查看与 SVG 导出同步；明细面板
+  同时显示路长（实际）与直线距离
 - **v0.5**：修复覆盖层黑框（误用 MenuPanel 贴图）与导出完成通知不达（扩展类必须 public，
   `GetExportedTypes` 只实例化 public 类型）；新增可调选项：标签可视距离 / 最大标签数 /
   道路与轨道各自的配色阈值（各 3 档）

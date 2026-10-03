@@ -3,6 +3,8 @@
 // 直接读取运行中的 NetManager（无需解码存档），复刻离线工具
 // cities_map/map_export.py --slope / --rail 的渲染规则：
 //   - 道路坡度色：<8% 绿 / 8-12% 黄 / 12-20% 橙 / >20% 红
+//   - 坡度 = |Δy| ÷ 实际道路长度（NetSegment.m_averageLength，各车道曲线弧长均值；
+//     与游戏内面板同一算法，曲线段不会因两点直线距离而高估坡度）
 //   - 轨道坡度色：<3% / 3-6% / 6-10% / >10%
 //   - 标注：道路 >20% 且长 >60m；轨道 >10% 且长 >80m（均排除 >60% 垂直过渡段）
 //   - 分类描边（RBR/RBH 自制红 / 原版灰 / 其他 mod 蓝）与图层序（管→栅→人→航→轨→路）
@@ -158,20 +160,22 @@ namespace RoadSlopeViewer
 
                 Vector3 a = nodeBuf[segBuf[i].m_startNode].m_position;
                 Vector3 b = nodeBuf[segBuf[i].m_endNode].m_position;
-                float dist = Horiz(a, b);
-                if (dist < 0.01f) { skipped++; continue; }
+                float straight = Horiz(a, b);
+                float len = segBuf[i].m_averageLength;      // 实际道路长度（各车道曲线弧长均值）
+                if (len < 0.1f) len = straight;             // 0 值兜底，同游戏做法
+                if (len < 0.01f) { skipped++; continue; }
 
                 Vector3 c1, c2;
                 NetSegment.CalculateMiddlePoints(a, segBuf[i].m_startDirection, b, segBuf[i].m_endDirection, true, true, out c1, out c2);
 
-                float pct = Mathf.Abs(b.y - a.y) / dist * 100f;
+                float pct = Mathf.Abs(b.y - a.y) / len * 100f;
                 float w = info.m_halfWidth * 2f;
                 if (w < 1f) w = 6f;
 
                 Seg s = new Seg();
                 s.x1 = a.x; s.z1 = a.z; s.x2 = b.x; s.z2 = b.z;
                 s.cx1 = c1.x; s.cz1 = c1.z; s.cx2 = c2.x; s.cz2 = c2.z;
-                s.pct = pct; s.dist = dist; s.yavg = (a.y + b.y) * 0.5f; s.w = w;
+                s.pct = pct; s.dist = len; s.yavg = (a.y + b.y) * 0.5f; s.w = w;
                 s.cat = cat; s.car = car; s.railKeep = railKeep;
                 list.Add(s);
             }

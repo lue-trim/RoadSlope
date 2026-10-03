@@ -1,5 +1,10 @@
 // RoadSlopeViewer v0.5 — 城市天际线 CS1：在游戏内查看道路 / 轨道交通坡度
 //
+// v0.6 变更：
+//   1) 坡度算法修正：坡度 = |高差| ÷ 实际道路长度（NetSegment.m_averageLength，游戏维护的
+//      各车道曲线弧长均值，与建路 UI 显示长度一致）——曲线段不再按两点直线距离高估坡度；
+//      明细面板同时列出“路长（实际）/ 直线”两个长度。
+//
 // v0.5 变更：
 //   1) 修复覆盖层黑框：v0.4 把标签背景贴图首选改成了未实测的 "MenuPanel"（作为
 //      58×20 小标签背景时渲染崩坏成异常大黑块）——恢复 v0.3 实测顺序的 GenericPanel 系；
@@ -225,7 +230,7 @@ namespace RoadSlopeViewer
 
             UILabel title = _panel.AddUIComponent(typeof(UILabel)) as UILabel;
             title.name = "RSV_Title";
-            title.text = "坡度查看器  v0.5";
+            title.text = "坡度查看器  v0.6";
             title.textScale = 0.85f;
             title.size = new Vector2(244f, 20f);
             title.relativePosition = new Vector3(14f, 6f);
@@ -433,7 +438,7 @@ namespace RoadSlopeViewer
                 float sq = (mid - camPos).sqrMagnitude;
                 if (sq > maxSqr) continue;
 
-                float pct = SlopePct(a, b);
+                float pct = SlopePct(a, b, segBuf[i].m_averageLength);
                 if (_steepOnly && pct < SteepPct) continue;
 
                 Vector3 sp = cam.WorldToScreenPoint(mid);
@@ -478,7 +483,7 @@ namespace RoadSlopeViewer
             Vector3 b = nm.m_nodes.m_buffer[seg.m_endNode].m_position;
             Vector3 sp = cam.WorldToScreenPoint((a + b) * 0.5f);
             if (sp.z <= 0f) { mk.isVisible = false; return; }
-            string txt = "选中 " + FmtPct(SlopePct(a, b));
+            string txt = "选中 " + FmtPct(SlopePct(a, b, seg.m_averageLength));
             if (mk.text != txt) mk.text = txt;
             Vector2 gui = view.ScreenPointToGUI(sp / view.inputScale);
             mk.relativePosition = new Vector3(gui.x - mk.width * 0.5f, gui.y - mk.height * 0.5f - 17f, 0f);
@@ -545,7 +550,7 @@ namespace RoadSlopeViewer
             Vector3 b = nm.m_nodes.m_buffer[seg.m_endNode].m_position;
             float dy = b.y - a.y;
             float dxz = Horiz(a, b);
-            float pct = SlopePct(a, b);
+            float pct = SlopePct(a, b, seg.m_averageLength);
             NetInfo info = PrefabCollection<NetInfo>.GetPrefab(seg.m_infoIndex);
             string roadName = info != null ? info.name : "?";
 
@@ -553,7 +558,7 @@ namespace RoadSlopeViewer
             WalkChain(_selected, out cs, out totH, out totDy, out maxPct);
 
             _lines[0].text = "坡度 " + FmtPct(pct) + "   高差 " + dy.ToString("0.0") + " m";
-            _lines[1].text = "水平 " + dxz.ToString("0.0") + " m   路长 " + seg.m_averageLength.ToString("0.0") + " m";
+            _lines[1].text = "路长 " + seg.m_averageLength.ToString("0.0") + " m   直线 " + dxz.ToString("0.0") + " m";
             _lines[2].text = "资产 " + Trunc(roadName, 24);
             _lines[3].text = "海拔 " + a.y.ToString("0.0") + " → " + b.y.ToString("0.0");
             _lines[4].text = "整条线 " + cs + "段 " + totH.ToString("0") + "m 均" + FmtPct(totH > 0.5f ? Mathf.Abs(totDy) / totH * 100f : 0f)
@@ -582,10 +587,12 @@ namespace RoadSlopeViewer
                 ushort sid = q.Dequeue();
                 Vector3 a = nodeBuf[segBuf[sid].m_startNode].m_position;
                 Vector3 b = nodeBuf[segBuf[sid].m_endNode].m_position;
+                float segLen = segBuf[sid].m_averageLength;
+                if (segLen < 0.1f) segLen = Horiz(a, b);
                 count++;
-                totalH += Horiz(a, b);
+                totalH += segLen;                                   // 累计实际路长
                 totalDy += b.y - a.y;
-                float p = SlopePct(a, b);
+                float p = SlopePct(a, b, segLen);
                 if (p > maxPct) maxPct = p;
 
                 for (int e = 0; e < 2; e++)
@@ -653,11 +660,12 @@ namespace RoadSlopeViewer
             return Mathf.Sqrt(dx * dx + dz * dz);
         }
 
-        private static float SlopePct(Vector3 a, Vector3 b)
+        /// <summary>坡度 = |高差| ÷ 实际道路长度（m_averageLength；0 值时兜底用直线距离，同游戏做法）。</summary>
+        private static float SlopePct(Vector3 a, Vector3 b, float roadLen)
         {
-            float h = Horiz(a, b);
-            if (h < 0.05f) return 0f;
-            return Mathf.Abs(b.y - a.y) / h * 100f;
+            float len = roadLen >= 0.1f ? roadLen : Horiz(a, b);
+            if (len < 0.05f) return 0f;
+            return Mathf.Abs(b.y - a.y) / len * 100f;
         }
 
         private static string FmtPct(float p)
