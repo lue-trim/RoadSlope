@@ -1,4 +1,9 @@
-// RoadSlopeViewer v0.5 — 城市天际线 CS1：在游戏内查看道路 / 轨道交通坡度
+// RoadSlopeViewer v0.7 — 城市天际线 CS1：在游戏内查看道路 / 轨道交通坡度
+//
+// v0.7 变更：
+//   1) 坡度高差改用“道路两端真实连接点”（车道贝塞尔 NetLane.m_bezier 的 a/d，端点落在
+//      节点边缘）而非节点中心——用 Node Controller 把路口节点改成倾斜面后，节点中心高差
+//      会大于道路两端实际高差、导致坡度偏大（原版水平节点两种取法等价）。
 //
 // v0.6 变更：
 //   1) 坡度算法修正：坡度 = |高差| ÷ 实际道路长度（NetSegment.m_averageLength，游戏维护的
@@ -30,6 +35,7 @@
 using System;
 using System.Collections.Generic;
 using ColossalFramework;
+using ColossalFramework.Math;
 using ColossalFramework.UI;
 using ICities;
 using UnityEngine;
@@ -230,7 +236,7 @@ namespace RoadSlopeViewer
 
             UILabel title = _panel.AddUIComponent(typeof(UILabel)) as UILabel;
             title.name = "RSV_Title";
-            title.text = "坡度查看器  v0.6";
+            title.text = "坡度查看器  v0.7";
             title.textScale = 0.85f;
             title.size = new Vector2(244f, 20f);
             title.relativePosition = new Vector3(14f, 6f);
@@ -422,7 +428,6 @@ namespace RoadSlopeViewer
             float maxDist = Mathf.Clamp(Rsv.LabelDist.value, 50f, 5000f);   // 选项可调（米）
             float maxSqr = maxDist * maxDist;
             NetSegment[] segBuf = nm.m_segments.m_buffer;
-            NetNode[] nodeBuf = nm.m_nodes.m_buffer;
             List<Cand> list = new List<Cand>(512);
 
             int size = (int)nm.m_segments.m_size;
@@ -432,8 +437,8 @@ namespace RoadSlopeViewer
                 NetInfo info = PrefabCollection<NetInfo>.GetPrefab(segBuf[i].m_infoIndex);
                 if (!Wanted(info)) continue;
 
-                Vector3 a = nodeBuf[segBuf[i].m_startNode].m_position;
-                Vector3 b = nodeBuf[segBuf[i].m_endNode].m_position;
+                Vector3 a, b;
+                RoadEnds(nm, (ushort)i, out a, out b);
                 Vector3 mid = (a + b) * 0.5f;
                 float sq = (mid - camPos).sqrMagnitude;
                 if (sq > maxSqr) continue;
@@ -479,8 +484,8 @@ namespace RoadSlopeViewer
             if (_selected == 0) { mk.isVisible = false; return; }
             NetSegment seg = nm.m_segments.m_buffer[_selected];
             if ((seg.m_flags & NetSegment.Flags.Created) == 0) { _selected = 0; mk.isVisible = false; return; }
-            Vector3 a = nm.m_nodes.m_buffer[seg.m_startNode].m_position;
-            Vector3 b = nm.m_nodes.m_buffer[seg.m_endNode].m_position;
+            Vector3 a, b;
+            RoadEnds(nm, _selected, out a, out b);
             Vector3 sp = cam.WorldToScreenPoint((a + b) * 0.5f);
             if (sp.z <= 0f) { mk.isVisible = false; return; }
             string txt = "选中 " + FmtPct(SlopePct(a, b, seg.m_averageLength));
@@ -500,7 +505,6 @@ namespace RoadSlopeViewer
 
             Vector3 mouse = Input.mousePosition;
             NetSegment[] segBuf = nm.m_segments.m_buffer;
-            NetNode[] nodeBuf = nm.m_nodes.m_buffer;
             float best = ClickPx * ClickPx;
             ushort bestSeg = 0;
             int size = (int)nm.m_segments.m_size;
@@ -510,8 +514,8 @@ namespace RoadSlopeViewer
                 NetInfo info = PrefabCollection<NetInfo>.GetPrefab(segBuf[i].m_infoIndex);
                 if (!Wanted(info)) continue;
 
-                Vector3 a = nodeBuf[segBuf[i].m_startNode].m_position;
-                Vector3 b = nodeBuf[segBuf[i].m_endNode].m_position;
+                Vector3 a, b;
+                RoadEnds(nm, (ushort)i, out a, out b);
                 Vector3 mid = (a + b) * 0.5f;
                 float d2 = ScreenDist2(cam, a, mid, b, mouse);
                 if (d2 < best) { best = d2; bestSeg = (ushort)i; }
@@ -546,8 +550,8 @@ namespace RoadSlopeViewer
             }
             NetManager nm = NetManager.instance;
             NetSegment seg = nm.m_segments.m_buffer[_selected];
-            Vector3 a = nm.m_nodes.m_buffer[seg.m_startNode].m_position;
-            Vector3 b = nm.m_nodes.m_buffer[seg.m_endNode].m_position;
+            Vector3 a, b;
+            RoadEnds(nm, _selected, out a, out b);
             float dy = b.y - a.y;
             float dxz = Horiz(a, b);
             float pct = SlopePct(a, b, seg.m_averageLength);
@@ -585,8 +589,8 @@ namespace RoadSlopeViewer
             while (q.Count > 0 && guard++ < 3000)
             {
                 ushort sid = q.Dequeue();
-                Vector3 a = nodeBuf[segBuf[sid].m_startNode].m_position;
-                Vector3 b = nodeBuf[segBuf[sid].m_endNode].m_position;
+                Vector3 a, b;
+                RoadEnds(nm, sid, out a, out b);
                 float segLen = segBuf[sid].m_averageLength;
                 if (segLen < 0.1f) segLen = Horiz(a, b);
                 count++;
@@ -652,6 +656,28 @@ namespace RoadSlopeViewer
                     || sub == ItemClass.SubService.PublicTransportTram;
             }
             return false;
+        }
+
+        /// <summary>
+        /// 取“道路部分”两端的真实起止点：车道贝塞尔端点（NetLane.m_bezier.a/.d，
+        /// 落在节点边缘的道路连接点处）。firstLane 无效时回退节点中心。
+        /// 用途：节点被 Node Controller 改成倾斜面后，节点中心高差 ≠ 道路两端高差，
+        /// 用端点算坡度才不会偏大（原版水平节点两者等价）。
+        /// </summary>
+        private static void RoadEnds(NetManager nm, ushort segId, out Vector3 a, out Vector3 b)
+        {
+            NetSegment[] segBuf = nm.m_segments.m_buffer;
+            uint firstLane = segBuf[segId].m_lanes;
+            if (firstLane != 0u && (int)firstLane < (int)nm.m_lanes.m_size)
+            {
+                Bezier3 bez = nm.m_lanes.m_buffer[firstLane].m_bezier;
+                a = bez.a;
+                b = bez.d;
+                return;
+            }
+            NetNode[] nodeBuf = nm.m_nodes.m_buffer;
+            a = nodeBuf[segBuf[segId].m_startNode].m_position;
+            b = nodeBuf[segBuf[segId].m_endNode].m_position;
         }
 
         private static float Horiz(Vector3 a, Vector3 b)

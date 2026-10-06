@@ -3,8 +3,9 @@
 // 直接读取运行中的 NetManager（无需解码存档），复刻离线工具
 // cities_map/map_export.py --slope / --rail 的渲染规则：
 //   - 道路坡度色：<8% 绿 / 8-12% 黄 / 12-20% 橙 / >20% 红
-//   - 坡度 = |Δy| ÷ 实际道路长度（NetSegment.m_averageLength，各车道曲线弧长均值；
-//     与游戏内面板同一算法，曲线段不会因两点直线距离而高估坡度）
+//   - 坡度 = 道路两端连接点高差 ÷ 实际道路长度（NetSegment.m_averageLength，各车道
+//     控制多边形长度均值）；高差取车道贝塞尔端点（节点边缘的连接点）而非节点中心——
+//     Node Controller 倾斜节点下节点中心高差会偏大；曲线段也不会因直线距离高估坡度
 //   - 轨道坡度色：<3% / 3-6% / 6-10% / >10%
 //   - 标注：道路 >20% 且长 >60m；轨道 >10% 且长 >80m（均排除 >60% 垂直过渡段）
 //   - 分类描边（RBR/RBH 自制红 / 原版灰 / 其他 mod 蓝）与图层序（管→栅→人→航→轨→路）
@@ -20,6 +21,7 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using ColossalFramework;
+using ColossalFramework.Math;
 using ColossalFramework.Plugins;
 using UnityEngine;
 
@@ -160,15 +162,25 @@ namespace RoadSlopeViewer
 
                 Vector3 a = nodeBuf[segBuf[i].m_startNode].m_position;
                 Vector3 b = nodeBuf[segBuf[i].m_endNode].m_position;
+                // 坡度高差用“道路两端真实连接点”（车道贝塞尔端点，落在节点边缘）而非节点中心：
+                // Node Controller 等把节点改成倾斜面时，节点中心高差会大于道路实际高差
+                float hy1 = a.y, hy2 = b.y;
+                uint firstLane = segBuf[i].m_lanes;
+                if (firstLane != 0u && (int)firstLane < (int)nm.m_lanes.m_size)
+                {
+                    Bezier3 bez = nm.m_lanes.m_buffer[firstLane].m_bezier;
+                    hy1 = bez.a.y;
+                    hy2 = bez.d.y;
+                }
                 float straight = Horiz(a, b);
-                float len = segBuf[i].m_averageLength;      // 实际道路长度（各车道曲线弧长均值）
+                float len = segBuf[i].m_averageLength;      // 实际道路长度（各车道控制多边形长度均值）
                 if (len < 0.1f) len = straight;             // 0 值兜底，同游戏做法
                 if (len < 0.01f) { skipped++; continue; }
 
                 Vector3 c1, c2;
                 NetSegment.CalculateMiddlePoints(a, segBuf[i].m_startDirection, b, segBuf[i].m_endDirection, true, true, out c1, out c2);
 
-                float pct = Mathf.Abs(b.y - a.y) / len * 100f;
+                float pct = Mathf.Abs(hy2 - hy1) / len * 100f;
                 float w = info.m_halfWidth * 2f;
                 if (w < 1f) w = 6f;
 
